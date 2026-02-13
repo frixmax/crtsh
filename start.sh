@@ -1,13 +1,10 @@
 #!/bin/sh
-
 echo "================================================"
-echo "🚀 Starting CertStream CT Monitor"
+echo "🚀 Starting crt.sh CT Monitor with SSL Validation"
 echo "================================================"
 
 # Créer les dossiers nécessaires
 mkdir -p /app/results
-touch /app/seen_domains.txt
-touch /app/new_domains.txt
 
 echo ""
 echo "📡 Starting HTTP server on port 8080..."
@@ -16,27 +13,13 @@ SERVER_PID=$!
 
 # Attendre que le serveur démarre
 sleep 3
-
 echo "✅ HTTP server started (PID: $SERVER_PID)"
-echo ""
-echo "🎯 Starting CertStream monitor..."
-python3 /app/certstream_monitor.py &
-MONITOR_PID=$!
 
-echo "✅ CertStream monitor started (PID: $MONITOR_PID)"
 echo ""
-echo "🔔 Starting notification loop (check every 5 minutes)..."
-echo "================================================"
-echo ""
+echo "🎯 Starting crt.sh monitor with SSL validation..."
+python3 /app/certstream_monitor.py
 
-# Première vérification après 30 secondes
-sleep 30
-/app/notify.sh
+# Note: Le script python gère maintenant les notifications en interne
+# et tourne en boucle infinie, donc on n'arrive jamais ici sauf si erreur
 
-# Boucle de notification toutes les 5 minutes
-while true; do
-    sleep 300
-    echo ""
-    echo "🔍 Checking for new domains... ($(date))"
-    /app/notify.sh
-done
+echo "❌ Monitor stopped unexpectedly"

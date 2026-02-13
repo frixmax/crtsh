@@ -4,8 +4,8 @@ RUN apk add --no-cache curl
 
 WORKDIR /app
 
-# Installer certstream-python
-RUN pip install --no-cache-dir certstream
+# Installer requests (pour crt.sh) au lieu de certstream
+RUN pip install --no-cache-dir requests
 
 COPY domains.txt .
 COPY start.sh .
