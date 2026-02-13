@@ -15,19 +15,19 @@ with open(DOMAINS_FILE, 'r') as f:
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-print(f"🎯 Monitoring: {', '.join(target_domains)}")
+print(f"Monitoring: {', '.join(target_domains)}")
 
 # Vérifier si c'est la première exécution
 is_first_run = not os.path.exists(FIRST_RUN_FILE)
 
 if is_first_run:
     print("\n" + "="*80)
-    print("PREMIÈRE EXÉCUTION - MODE INITIALISATION")
+    print("PREMIERE EXECUTION - MODE INITIALISATION")
     print("Remplissage de la base de domaines existants...")
-    print("AUCUNE notification ne sera envoyée pendant cette phase")
+    print("AUCUNE notification ne sera envoyee pendant cette phase")
     print("="*80 + "\n")
 else:
-    print("\nMode monitoring normal - Notifications activées\n")
+    print("\nMode monitoring normal - Notifications activees\n")
 
 # Pour éviter de retraiter les mêmes certificats
 processed_certs = set()
@@ -124,25 +124,27 @@ def monitor_loop():
             cycle_duration = int(time.time() - cycle_start)
             
             print(f"\n{'='*80}")
-            print(f"CYCLE #{cycle_number} TERMINÉ - Durée: {cycle_duration}s ({cycle_duration//60}m {cycle_duration%60}s)")
+            print(f"CYCLE #{cycle_number} COMPLETE - Duration: {cycle_duration}s ({cycle_duration//60}m {cycle_duration%60}s)")
             print(f"{'='*80}")
             
-            # Après le premier cycle complet
+            # Marquer la première exécution comme terminée AVANT d'appeler notify.sh
             if is_first_run:
                 print("\n" + "="*80)
-                print("INITIALISATION TERMINÉE")
+                print("INITIALISATION TERMINEE")
                 print("Base de domaines existants remplie")
-                print("Les notifications Discord seront maintenant envoyées")
+                print("Les notifications Discord seront maintenant envoyees")
                 print("="*80 + "\n")
                 
-                # Marquer la première exécution comme terminée
                 with open(FIRST_RUN_FILE, 'w') as f:
                     f.write(datetime.now().isoformat())
-                
-                # Appeler notify.sh pour initialiser seen_domains.txt
-                if os.path.exists('./notify.sh'):
-                    print("Initializing seen_domains.txt...")
-                    os.system('./notify.sh')
+            
+            # Appeler notify.sh APRÈS CHAQUE cycle (init ou normal)
+            if os.path.exists('./notify.sh'):
+                if is_first_run:
+                    print("Initializing seen_domains.txt (no notifications)...")
+                else:
+                    print("\nChecking for new domains and notifying...")
+                os.system('./notify.sh')
             
             print(f"\nWaiting {CHECK_INTERVAL} seconds before next cycle...")
             time.sleep(CHECK_INTERVAL)
@@ -157,30 +159,4 @@ def monitor_loop():
 
 if __name__ == "__main__":
     monitor_loop()
-```
 
-## **Changements principaux :**
-
-✅ **Cycle complet garanti** - attend que TOUS les domaines soient traités
-✅ **Compteur de progression** - `[3/73] Checking domain...`
-✅ **Durée du cycle affichée** - tu sais combien de temps ça prend
-✅ **5 minutes APRÈS la fin** - pas de chevauchement
-✅ **Numéro de cycle** - pour suivre facilement
-
-## **Exemple de logs :**
-```
-================================================================================
-CYCLE #1 - 2026-02-13 10:30:00
-================================================================================
-
-[1/73] Initializing aswatson.com... .......... OK
-[2/73] Initializing aswatson.net... OK
-[3/73] Initializing parknshop.com... Error fetching crt.sh...
-...
-[73/73] Initializing watsons.com.tr... .......... OK
-
-================================================================================
-CYCLE #1 TERMINÉ - Durée: 245s (4m 5s)
-================================================================================
-
-Waiting 300 seconds before next cycle...
