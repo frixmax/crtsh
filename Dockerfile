@@ -1,12 +1,15 @@
 FROM golang:1.21-alpine
 
-RUN apk add --no-cache git python3 curl ca-certificates
+RUN apk add --no-cache git python3 curl ca-certificates build-base
 
-# Installer Gungnir avec les bonnes options Git
-RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
-    git config --global advice.detachedHead false && \
-    go env -w GOPRIVATE="" && \
-    go install github.com/opencyber-fr/gungnir@latest
+WORKDIR /tmp
+
+# Cloner et compiler Gungnir depuis le bon repo
+RUN git clone https://github.com/d-Rickyy-b/gungnir.git && \
+    cd gungnir && \
+    go build -o /usr/local/bin/gungnir . && \
+    cd / && \
+    rm -rf /tmp/gungnir
 
 WORKDIR /app
 

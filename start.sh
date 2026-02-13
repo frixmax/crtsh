@@ -20,7 +20,7 @@ sleep 3
 echo "✅ HTTP server started (PID: $SERVER_PID)"
 echo ""
 echo "🎯 Starting Gungnir CT scanner..."
-/go/bin/gungnir -r /app/domains.txt -o /app/results/ -v -j -f 2>&1 &
+gungnir -r /app/domains.txt -o /app/results/ -v -j -f 2>&1 &
 GUNGNIR_PID=$!
 
 echo "✅ Gungnir started (PID: $GUNGNIR_PID)"
