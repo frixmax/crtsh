@@ -2,12 +2,11 @@
 import requests
 import time
 import os
-import ssl
-import socket
 from datetime import datetime
 
 DOMAINS_FILE = 'domains.txt'
 OUTPUT_DIR = 'results'
+FIRST_RUN_FILE = '/app/.first_run_complete'
 CHECK_INTERVAL = 300  # Vérifier toutes les 5 minutes
 
 # Charger les domaines à surveiller
@@ -17,6 +16,18 @@ with open(DOMAINS_FILE, 'r') as f:
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 print(f"🎯 Monitoring: {', '.join(target_domains)}")
+
+# Vérifier si c'est la première exécution
+is_first_run = not os.path.exists(FIRST_RUN_FILE)
+
+if is_first_run:
+    print("\n" + "="*80)
+    print("🔧 PREMIÈRE EXÉCUTION - MODE INITIALISATION")
+    print("📝 Remplissage de la base de domaines existants...")
+    print("⚠️  AUCUNE notification ne sera envoyée pendant cette phase")
+    print("="*80 + "\n")
+else:
+    print("\n✅ Mode monitoring normal - Notifications activées\n")
 
 # Pour éviter de retraiter les mêmes certificats
 processed_certs = set()
@@ -33,55 +44,6 @@ def get_certificates_from_crtsh(domain):
         print(f"❌ Error fetching crt.sh for {domain}: {e}")
         return []
 
-def check_ssl_issues(domain):
-    """Vérifie les problèmes SSL d'un domaine en temps réel"""
-    issues = []
-    cert_info = {}
-    
-    # Nettoyer le domaine (enlever les wildcards)
-    clean_domain = domain.lstrip('*.')
-    
-    try:
-        context = ssl.create_default_context()
-        
-        with socket.create_connection((clean_domain, 443), timeout=10) as sock:
-            with context.wrap_socket(sock, server_hostname=clean_domain) as ssock:
-                cert = ssock.getpeercert()
-                cert_info = {
-                    'issuer': dict(x[0] for x in cert['issuer']),
-                    'subject': dict(x[0] for x in cert['subject']),
-                    'notAfter': cert['notAfter'],
-                    'notBefore': cert['notBefore'],
-                    'subjectAltName': cert.get('subjectAltName', [])
-                }
-                
-                # Vérifier expiration
-                not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                if not_after < datetime.now():
-                    issues.append("EXPIRED")
-                
-                # Vérifier self-signed
-                if cert_info['issuer'] == cert_info['subject']:
-                    issues.append("SELF-SIGNED")
-                
-                # Vérifier correspondance du nom
-                sans = [x[1] for x in cert.get('subjectAltName', [])]
-                if clean_domain not in sans and f"*.{'.'.join(clean_domain.split('.')[1:])}" not in sans:
-                    issues.append("NAME_MISMATCH")
-                
-    except ssl.SSLError as e:
-        issues.append(f"SSL_ERROR: {str(e)}")
-    except socket.timeout:
-        issues.append("TIMEOUT")
-    except socket.gaierror:
-        issues.append("DNS_ERROR")
-    except ConnectionRefusedError:
-        issues.append("CONNECTION_REFUSED")
-    except Exception as e:
-        issues.append(f"ERROR: {str(e)}")
-    
-    return issues, cert_info
-
 def process_certificate(cert_data, target_domain):
     """Traite un certificat trouvé"""
     domain = cert_data['name_value']
@@ -96,62 +58,74 @@ def process_certificate(cert_data, target_domain):
     processed_certs.add(cert_key)
     
     timestamp = datetime.now().isoformat()
-    print(f"[{timestamp}] 🔍 Found: {domain}")
     
-    # Vérifier les problèmes SSL
-    issues, cert_info = check_ssl_issues(domain)
+    if is_first_run:
+        # Mode silencieux - juste afficher un point de progression
+        print(".", end="", flush=True)
+    else:
+        # Mode normal - afficher les nouveaux domaines
+        print(f"[{timestamp}] 🆕 {domain}")
     
-    # Enregistrer TOUT dans le même fichier
+    # Enregistrer dans le fichier
     output_file = os.path.join(OUTPUT_DIR, target_domain)
     with open(output_file, 'a') as f:
-        f.write(f"\n{'='*80}\n")
-        f.write(f"[{timestamp}] {domain}\n")
-        f.write(f"Certificate ID: {cert_id}\n")
-        
-        if issues:
-            f.write(f"⚠️  Issues: {', '.join(issues)}\n")
-            print(f"⚠️  Issues detected: {', '.join(issues)}")
-        else:
-            f.write(f"✅ Status: OK\n")
-            print(f"✅ No issues")
-        
-        if cert_info:
-            f.write(f"Issuer: {cert_info.get('issuer', {}).get('organizationName', 'N/A')}\n")
-            f.write(f"Valid until: {cert_info.get('notAfter', 'N/A')}\n")
-        
-        f.write(f"{'='*80}\n")
-    
-    # Notifier seulement si problème
-    if issues and os.path.exists('./notify.sh'):
-        os.system(f'./notify.sh "{domain}" "{", ".join(issues)}"')
+        f.write(f"{domain}\n")
 
 def monitor_loop():
     """Boucle principale de surveillance"""
+    global is_first_run
+    
     print("🚀 Starting Certificate Transparency monitor with crt.sh...")
-    print(f"⏱️  Checking every {CHECK_INTERVAL} seconds")
+    print(f"⏱️  Checking every {CHECK_INTERVAL} seconds\n")
     
     while True:
         try:
             for target in target_domains:
-                print(f"\n📡 Checking certificates for {target}...")
+                if is_first_run:
+                    print(f"\n📡 Initializing {target}...", end=" ", flush=True)
+                else:
+                    print(f"\n📡 Checking certificates for {target}...")
                 
                 certificates = get_certificates_from_crtsh(target)
                 
                 if certificates:
-                    print(f"Found {len(certificates)} certificates for {target}")
+                    if not is_first_run:
+                        print(f"Found {len(certificates)} certificates")
                     
                     # Trier par date (plus récents d'abord)
                     certificates.sort(key=lambda x: x.get('entry_timestamp', ''), reverse=True)
                     
-                    # Traiter seulement les 10 plus récents pour éviter la surcharge
+                    # Traiter seulement les 10 plus récents
                     for cert in certificates[:10]:
                         domain_lower = cert['name_value'].lower().lstrip('*.')
                         
                         if domain_lower.endswith(target) or domain_lower == target:
                             process_certificate(cert, target)
                 
-                # Pause entre chaque domaine pour éviter de surcharger crt.sh
+                if is_first_run:
+                    print(" ✓")
+                
+                # Pause entre chaque domaine
                 time.sleep(2)
+            
+            # Après le premier cycle complet
+            if is_first_run:
+                print("\n" + "="*80)
+                print("✅ INITIALISATION TERMINÉE")
+                print("📊 Base de domaines existants remplie")
+                print("🔔 Les notifications Discord seront maintenant envoyées")
+                print("="*80 + "\n")
+                
+                # Marquer la première exécution comme terminée
+                with open(FIRST_RUN_FILE, 'w') as f:
+                    f.write(datetime.now().isoformat())
+                
+                is_first_run = False
+                
+                # Appeler notify.sh pour initialiser seen_domains.txt
+                if os.path.exists('./notify.sh'):
+                    print("📝 Initializing seen_domains.txt...")
+                    os.system('./notify.sh')
             
             print(f"\n⏳ Waiting {CHECK_INTERVAL} seconds before next check...")
             time.sleep(CHECK_INTERVAL)
@@ -166,3 +140,28 @@ def monitor_loop():
 
 if __name__ == "__main__":
     monitor_loop()
+```
+
+## **Comment ça fonctionne :**
+
+### **1ère exécution (initialisation) :**
+```
+🔧 PREMIÈRE EXÉCUTION - MODE INITIALISATION
+📝 Remplissage de la base de domaines existants...
+⚠️  AUCUNE notification ne sera envoyée
+
+📡 Initializing aswatson.com... ............ ✓
+📡 Initializing iciparisxl.be... .......... ✓
+
+✅ INITIALISATION TERMINÉE
+📊 Base de domaines existants remplie
+🔔 Les notifications Discord seront maintenant envoyées
+```
+
+### **2ème exécution et suivantes :**
+```
+✅ Mode monitoring normal - Notifications activées
+
+📡 Checking certificates for aswatson.com...
+[2026-02-13T10:30:00] 🆕 new-api.aswatson.com
+[2026-02-13T10:30:01] 🆕 test.aswatson.com

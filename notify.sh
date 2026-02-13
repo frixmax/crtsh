@@ -27,33 +27,45 @@ if [ -d "$RESULTS_DIR" ] && [ "$(ls -A $RESULTS_DIR 2>/dev/null)" ]; then
             cat "$NEW_FILE"
             echo "---"
             
-            # Préparer le message Discord
-            MESSAGE=$(cat "$NEW_FILE" | head -25 | sed 's/^/• /' | tr '\n' '\n')
+            # Préparer le message Discord (échapper les caractères spéciaux)
+            MESSAGE=$(cat "$NEW_FILE" | head -25 | sed 's/"/\\"/g' | awk '{print "• " $0}' | paste -sd '\n' -)
             
             # Notification Discord
             if [ "$COUNT" -gt 25 ]; then
-                FOOTER="\n\n... et $((COUNT - 25)) autres domaines"
+                FOOTER="\\n\\n... et $((COUNT - 25)) autres domaines"
             else
                 FOOTER=""
             fi
             
-            curl -X POST "$DISCORD_WEBHOOK" \
-                -H "Content-Type: application/json" \
-                -d "{\"embeds\": [{
-                    \"title\": \"🎯 Nouveaux sous-domaines détectés\",
-                    \"description\": \"**$COUNT** nouveaux domaines trouvés\",
-                    \"color\": 65280,
-                    \"fields\": [{
-                        \"name\": \"Domaines\",
-                        \"value\": \"\`\`\`$MESSAGE$FOOTER\`\`\`\"
-                    }],
-                    \"footer\": {
-                        \"text\": \"Gungnir CT Monitor\"
-                    },
-                    \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
-                }]}" 2>/dev/null
+            # Construire le JSON proprement
+            JSON_PAYLOAD=$(cat <<EOF
+{
+  "embeds": [{
+    "title": "🎯 Nouveaux sous-domaines détectés",
+    "description": "**${COUNT}** nouveaux domaines trouvés",
+    "color": 65280,
+    "fields": [{
+      "name": "Domaines",
+      "value": "\`\`\`\n${MESSAGE}${FOOTER}\n\`\`\`"
+    }],
+    "footer": {
+      "text": "Gungnir CT Monitor"
+    },
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  }]
+}
+EOF
+)
             
-            echo "✅ Discord notification sent!"
+            RESPONSE=$(curl -s -X POST "$DISCORD_WEBHOOK" \
+                -H "Content-Type: application/json" \
+                -d "$JSON_PAYLOAD")
+            
+            if echo "$RESPONSE" | grep -q "code"; then
+                echo "❌ Discord error: $RESPONSE"
+            else
+                echo "✅ Discord notification sent!"
+            fi
         fi
         
         # Mettre à jour la liste des domaines vus
