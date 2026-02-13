@@ -7,7 +7,7 @@ from datetime import datetime
 DOMAINS_FILE = 'domains.txt'
 OUTPUT_DIR = 'results'
 FIRST_RUN_FILE = '/app/.first_run_complete'
-CHECK_INTERVAL = 300  # Vérifier toutes les 5 minutes
+CHECK_INTERVAL = 600  # Vérifier toutes les 5 minutes
 
 # Charger les domaines à surveiller
 with open(DOMAINS_FILE, 'r') as f:
@@ -32,23 +32,17 @@ else:
 # Pour éviter de retraiter les mêmes certificats
 processed_certs = set()
 
-def get_certificates_from_crtsh(domain, retries=3):
-    """Récupère tous les certificats d'un domaine depuis crt.sh avec retry"""
-    for attempt in range(retries):
-        try:
-            url = f"https://crt.sh/?q=%.{domain}&output=json"
-            response = requests.get(url, timeout=30)
-            if response.status_code == 200:
-                return response.json()
-            return []
-        except Exception as e:
-            if attempt < retries - 1:
-                print(f"\nRetry {attempt + 1}/{retries - 1} for {domain}...", end=" ", flush=True)
-                time.sleep(5)  # Attendre 5 secondes avant retry
-            else:
-                print(f"\nError fetching crt.sh for {domain} after {retries} attempts: {e}")
-                return []
-    return []
+def get_certificates_from_crtsh(domain):
+    """Récupère tous les certificats d'un domaine depuis crt.sh"""
+    try:
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        response = requests.get(url, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        return []
+    except Exception as e:
+        print(f"\nError fetching crt.sh for {domain}: {e}")
+        return []
 
 def process_certificate(cert_data, target_domain):
     """Traite un certificat trouvé"""
@@ -133,9 +127,6 @@ def monitor_loop():
                 if os.path.exists('./notify.sh'):
                     print("Initializing seen_domains.txt...")
                     os.system('./notify.sh')
-                
-                # Ne PAS mettre is_first_run = False ici
-                # Il sera re-vérifié au prochain cycle via le fichier
             
             print(f"\nWaiting {CHECK_INTERVAL} seconds before next check...")
             time.sleep(CHECK_INTERVAL)
