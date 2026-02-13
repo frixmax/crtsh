@@ -22,12 +22,12 @@ is_first_run = not os.path.exists(FIRST_RUN_FILE)
 
 if is_first_run:
     print("\n" + "="*80)
-    print("🔧 PREMIÈRE EXÉCUTION - MODE INITIALISATION")
-    print("📝 Remplissage de la base de domaines existants...")
-    print("⚠️  AUCUNE notification ne sera envoyée pendant cette phase")
+    print("PREMIÈRE EXÉCUTION - MODE INITIALISATION")
+    print("Remplissage de la base de domaines existants...")
+    print("AUCUNE notification ne sera envoyée pendant cette phase")
     print("="*80 + "\n")
 else:
-    print("\n✅ Mode monitoring normal - Notifications activées\n")
+    print("\nMode monitoring normal - Notifications activées\n")
 
 # Pour éviter de retraiter les mêmes certificats
 processed_certs = set()
@@ -41,7 +41,7 @@ def get_certificates_from_crtsh(domain):
             return response.json()
         return []
     except Exception as e:
-        print(f"❌ Error fetching crt.sh for {domain}: {e}")
+        print(f"Error fetching crt.sh for {domain}: {e}")
         return []
 
 def process_certificate(cert_data, target_domain):
@@ -64,7 +64,7 @@ def process_certificate(cert_data, target_domain):
         print(".", end="", flush=True)
     else:
         # Mode normal - afficher les nouveaux domaines
-        print(f"[{timestamp}] 🆕 {domain}")
+        print(f"[{timestamp}] NEW: {domain}")
     
     # Enregistrer dans le fichier
     output_file = os.path.join(OUTPUT_DIR, target_domain)
@@ -75,16 +75,16 @@ def monitor_loop():
     """Boucle principale de surveillance"""
     global is_first_run
     
-    print("🚀 Starting Certificate Transparency monitor with crt.sh...")
-    print(f"⏱️  Checking every {CHECK_INTERVAL} seconds\n")
+    print("Starting Certificate Transparency monitor with crt.sh...")
+    print(f"Checking every {CHECK_INTERVAL} seconds\n")
     
     while True:
         try:
             for target in target_domains:
                 if is_first_run:
-                    print(f"\n📡 Initializing {target}...", end=" ", flush=True)
+                    print(f"\nInitializing {target}...", end=" ", flush=True)
                 else:
-                    print(f"\n📡 Checking certificates for {target}...")
+                    print(f"\nChecking certificates for {target}...")
                 
                 certificates = get_certificates_from_crtsh(target)
                 
@@ -103,7 +103,7 @@ def monitor_loop():
                             process_certificate(cert, target)
                 
                 if is_first_run:
-                    print(" ✓")
+                    print(" OK")
                 
                 # Pause entre chaque domaine
                 time.sleep(2)
@@ -111,9 +111,9 @@ def monitor_loop():
             # Après le premier cycle complet
             if is_first_run:
                 print("\n" + "="*80)
-                print("✅ INITIALISATION TERMINÉE")
-                print("📊 Base de domaines existants remplie")
-                print("🔔 Les notifications Discord seront maintenant envoyées")
+                print("INITIALISATION TERMINÉE")
+                print("Base de domaines existants remplie")
+                print("Les notifications Discord seront maintenant envoyées")
                 print("="*80 + "\n")
                 
                 # Marquer la première exécution comme terminée
@@ -124,44 +124,19 @@ def monitor_loop():
                 
                 # Appeler notify.sh pour initialiser seen_domains.txt
                 if os.path.exists('./notify.sh'):
-                    print("📝 Initializing seen_domains.txt...")
+                    print("Initializing seen_domains.txt...")
                     os.system('./notify.sh')
             
-            print(f"\n⏳ Waiting {CHECK_INTERVAL} seconds before next check...")
+            print(f"\nWaiting {CHECK_INTERVAL} seconds before next check...")
             time.sleep(CHECK_INTERVAL)
             
         except KeyboardInterrupt:
-            print("\n🛑 Monitor stopped")
+            print("\nMonitor stopped")
             break
         except Exception as e:
-            print(f"❌ Error in main loop: {e}")
-            print("🔄 Retrying in 30 seconds...")
+            print(f"Error in main loop: {e}")
+            print("Retrying in 30 seconds...")
             time.sleep(30)
 
 if __name__ == "__main__":
     monitor_loop()
-```
-
-## **Comment ça fonctionne :**
-
-### **1ère exécution (initialisation) :**
-```
-🔧 PREMIÈRE EXÉCUTION - MODE INITIALISATION
-📝 Remplissage de la base de domaines existants...
-⚠️  AUCUNE notification ne sera envoyée
-
-📡 Initializing aswatson.com... ............ ✓
-📡 Initializing iciparisxl.be... .......... ✓
-
-✅ INITIALISATION TERMINÉE
-📊 Base de domaines existants remplie
-🔔 Les notifications Discord seront maintenant envoyées
-```
-
-### **2ème exécution et suivantes :**
-```
-✅ Mode monitoring normal - Notifications activées
-
-📡 Checking certificates for aswatson.com...
-[2026-02-13T10:30:00] 🆕 new-api.aswatson.com
-[2026-02-13T10:30:01] 🆕 test.aswatson.com
