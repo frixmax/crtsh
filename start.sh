@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo "================================================"
-echo "🚀 Starting Gungnir CT Monitor"
+echo "🚀 Starting CertStream CT Monitor"
 echo "================================================"
 
 # Créer les dossiers nécessaires
@@ -19,11 +19,11 @@ sleep 3
 
 echo "✅ HTTP server started (PID: $SERVER_PID)"
 echo ""
-echo "🎯 Starting Gungnir CT scanner..."
-gungnir -r /app/domains.txt -o /app/results/ -v -j -f 2>&1 &
-GUNGNIR_PID=$!
+echo "🎯 Starting CertStream monitor..."
+python3 /app/certstream_monitor.py &
+MONITOR_PID=$!
 
-echo "✅ Gungnir started (PID: $GUNGNIR_PID)"
+echo "✅ CertStream monitor started (PID: $MONITOR_PID)"
 echo ""
 echo "🔔 Starting notification loop (check every 5 minutes)..."
 echo "================================================"
