@@ -2,8 +2,8 @@ import requests
 import time
 import os
 import sys
-import json
 from datetime import datetime, timedelta
+import json
 
 DOMAINS_FILE = 'domains.txt'
 OUTPUT_DIR = 'results'
@@ -32,12 +32,15 @@ except Exception as e:
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 print(f"Monitoring: {', '.join(target_domains)}", flush=True)
 
+# ============================================================================
+# CORRECTION #1: Gérer correctement le flag first_run
+# ============================================================================
 is_first_run = not os.path.exists(FIRST_RUN_FILE)
 
 # Déduplication globale
 processed_certs = set()
 
-# Charger les domaines déjà vus (avec timestamp)
+# Charger les domaines déjà vus
 def load_seen_domains():
     if os.path.exists(SEEN_FILE):
         try:
@@ -59,7 +62,7 @@ seen_domains = load_seen_domains()
 print(f"📊 {len(seen_domains)} domaines déjà vus", flush=True)
 
 def get_certificates_from_crtsh(domain):
-    # Réduire à 2 jours au lieu de 7
+    # CORRECTION #2: Réduire à 2 jours au lieu de 7
     min_date = (datetime.utcnow() - timedelta(days=2)).strftime('%Y-%m-%d')
     try:
         url = f"https://crt.sh/?q=%.{domain}&output=json&minNotBefore={min_date}"
@@ -88,7 +91,7 @@ def process_certificate(cert_data, target_domain):
         if not domain:
             return
         
-        # CORRECTION #1: Valider le domaine AVANT de vérifier seen_domains
+        # CORRECTION #3: Valider le domaine AVANT de vérifier seen_domains
         if not is_subdomain_of_target(domain, target_domain):
             return
         
@@ -98,12 +101,13 @@ def process_certificate(cert_data, target_domain):
         if domain_clean in seen_domains:
             return
         
+        # CORRECTION #4: Enregistrer AVANT de filtrer sur first_run
         seen_domains.add(domain_clean)
         save_seen_domain(domain_clean)
         
         timestamp = datetime.now().isoformat()
         
-        # CORRECTION #2: Au 1er run, ENREGISTRER les domaines (pas retour)
+        # Au 1er run: enregistrer mais pas d'output file
         if is_first_run:
             print(".", end="", flush=True)
             return
@@ -128,6 +132,8 @@ def monitor_loop():
         try:
             cycle_number += 1
             cycle_start = time.time()
+            
+            # CORRECTION #5: Vérifier le flag à chaque cycle
             is_first_run = not os.path.exists(FIRST_RUN_FILE)
             
             print(f"\n=== CYCLE #{cycle_number} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", flush=True)
@@ -147,9 +153,9 @@ def monitor_loop():
             cycle_duration = int(time.time() - cycle_start)
             print(f"\nCycle terminé en {cycle_duration}s", flush=True)
             
-            # CORRECTION #3: Gérer le 1er run correctement
+            # CORRECTION #6: Gérer le 1er run correctement
             if is_first_run:
-                print("✅ Initialisation terminée → notifications activées", flush=True)
+                print("✅ Initialisation terminée → notifications activées au prochain cycle", flush=True)
                 with open(FIRST_RUN_FILE, 'w') as f:
                     f.write(datetime.now().isoformat())
                 # Vider results/ pour ne pas déclencher de fausses alertes
@@ -161,7 +167,7 @@ def monitor_loop():
                         except Exception as e:
                             print(f"⚠️ Erreur suppression {output_file}: {e}", file=sys.stderr, flush=True)
             else:
-                # Appel notify.sh SEULEMENT après le 1er run
+                # CORRECTION #7: Appel notify.sh SEULEMENT après le 1er run
                 print("📢 Lancement notification...", flush=True)
                 ret = os.system('./notify.sh')
                 if ret != 0:
