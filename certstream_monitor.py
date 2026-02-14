@@ -2,6 +2,7 @@ import requests
 import time
 import os
 import sys
+import json
 from datetime import datetime, timedelta
 
 DOMAINS_FILE = 'domains.txt'
@@ -36,7 +37,7 @@ is_first_run = not os.path.exists(FIRST_RUN_FILE)
 # Déduplication globale
 processed_certs = set()
 
-# Charger les domaines déjà vus
+# Charger les domaines déjà vus (avec timestamp)
 def load_seen_domains():
     if os.path.exists(SEEN_FILE):
         try:
@@ -58,7 +59,8 @@ seen_domains = load_seen_domains()
 print(f"📊 {len(seen_domains)} domaines déjà vus", flush=True)
 
 def get_certificates_from_crtsh(domain):
-    min_date = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d')
+    # Réduire à 2 jours au lieu de 7
+    min_date = (datetime.utcnow() - timedelta(days=2)).strftime('%Y-%m-%d')
     try:
         url = f"https://crt.sh/?q=%.{domain}&output=json&minNotBefore={min_date}"
         response = requests.get(url, timeout=30)
@@ -69,6 +71,11 @@ def get_certificates_from_crtsh(domain):
     except Exception as e:
         print(f"⚠️ Erreur crt.sh {domain}: {e}", file=sys.stderr, flush=True)
         return []
+
+def is_subdomain_of_target(domain, target):
+    """Vérifie si domain est un sous-domaine de target"""
+    domain_lower = domain.lower().lstrip('*.')
+    return domain_lower.endswith(target) or domain_lower == target
 
 def process_certificate(cert_data, target_domain):
     try:
@@ -81,24 +88,34 @@ def process_certificate(cert_data, target_domain):
         if not domain:
             return
         
-        # Vérifier si déjà vu
-        if domain in seen_domains:
+        # CORRECTION #1: Valider le domaine AVANT de vérifier seen_domains
+        if not is_subdomain_of_target(domain, target_domain):
             return
         
-        seen_domains.add(domain)
-        save_seen_domain(domain)
+        domain_clean = domain.lstrip('*.')
+        
+        # Vérifier si déjà vu
+        if domain_clean in seen_domains:
+            return
+        
+        seen_domains.add(domain_clean)
+        save_seen_domain(domain_clean)
         
         timestamp = datetime.now().isoformat()
         
+        # CORRECTION #2: Au 1er run, ENREGISTRER les domaines (pas retour)
         if is_first_run:
             print(".", end="", flush=True)
             return
         
-        # Nouveau domaine détecté
-        print(f"[{timestamp}] NEW: {domain}", flush=True)
+        # Nouveau domaine détecté (après le 1er run)
+        print(f"[{timestamp}] NEW: {domain_clean}", flush=True)
         output_file = os.path.join(OUTPUT_DIR, target_domain.replace('.', '_'))
-        with open(output_file, 'a') as f:
-            f.write(f"{domain}\n")
+        try:
+            with open(output_file, 'a') as f:
+                f.write(f"{domain_clean}\n")
+        except Exception as e:
+            print(f"⚠️ Erreur écriture {output_file}: {e}", file=sys.stderr, flush=True)
             
     except Exception as e:
         print(f"⚠️ Erreur traitement certificat: {e}", file=sys.stderr, flush=True)
@@ -122,9 +139,7 @@ def monitor_loop():
                 if certificates:
                     certificates.sort(key=lambda x: x.get('entry_timestamp', ''), reverse=True)
                     for cert in certificates[:15]:
-                        domain_lower = cert.get('name_value', '').lower().lstrip('*.')
-                        if domain_lower.endswith(target) or domain_lower == target:
-                            process_certificate(cert, target)
+                        process_certificate(cert, target)
                 
                 print("OK", flush=True)
                 time.sleep(2)
@@ -132,17 +147,21 @@ def monitor_loop():
             cycle_duration = int(time.time() - cycle_start)
             print(f"\nCycle terminé en {cycle_duration}s", flush=True)
             
+            # CORRECTION #3: Gérer le 1er run correctement
             if is_first_run:
                 print("✅ Initialisation terminée → notifications activées", flush=True)
                 with open(FIRST_RUN_FILE, 'w') as f:
                     f.write(datetime.now().isoformat())
-                # Vider results/
+                # Vider results/ pour ne pas déclencher de fausses alertes
                 for target in target_domains:
                     output_file = os.path.join(OUTPUT_DIR, target.replace('.', '_'))
                     if os.path.exists(output_file):
-                        os.remove(output_file)
+                        try:
+                            os.remove(output_file)
+                        except Exception as e:
+                            print(f"⚠️ Erreur suppression {output_file}: {e}", file=sys.stderr, flush=True)
             else:
-                # Appel notify.sh
+                # Appel notify.sh SEULEMENT après le 1er run
                 print("📢 Lancement notification...", flush=True)
                 ret = os.system('./notify.sh')
                 if ret != 0:
