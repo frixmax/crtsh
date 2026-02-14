@@ -17,13 +17,14 @@ if [ ! -s /tmp/all_domains.txt ]; then
     exit 0
 fi
 
-# Comparer → nouveaux (ceux qui ne sont PAS déjà dans seen)
-comm -13 <(sort "$SEEN_FILE") <(sort /tmp/all_domains.txt) > "$NEW_FILE"
+# Comparer → nouveaux (CORRECTION ICI - compatible sh)
+sort "$SEEN_FILE" > /tmp/seen_sorted.txt
+sort /tmp/all_domains.txt > /tmp/all_sorted.txt
+comm -13 /tmp/seen_sorted.txt /tmp/all_sorted.txt > "$NEW_FILE"
 
 # Si pas de nouveaux
 if [ ! -s "$NEW_FILE" ]; then
     echo "Aucun nouveau domaine"
-    # Cleanup
     cat /tmp/all_domains.txt >> "$SEEN_FILE"
     sort -u -o "$SEEN_FILE" "$SEEN_FILE"
     > "$NEW_FILE"
@@ -37,7 +38,6 @@ mv "$NEW_FILE.filtered" "$NEW_FILE"
 # Vérifier après filtrage
 if [ ! -s "$NEW_FILE" ]; then
     echo "Tous les domaines filtrés (bruit)"
-    # Cleanup
     cat /tmp/all_domains.txt >> "$SEEN_FILE"
     sort -u -o "$SEEN_FILE" "$SEEN_FILE"
     > "$NEW_FILE"
@@ -51,33 +51,44 @@ if [ "$COUNT" -gt 50 ]; then
     echo "Domaines détectés mais non notifiés :"
     head -10 "$NEW_FILE"
 else
-    # Préparer le message (échapper les guillemets et retours à la ligne)
-    MESSAGE=$(head -500 "$NEW_FILE" | sed 's/"/\\"/g' | tr '\n' ' ' | sed 's/ $//')
+    # Préparer le message (échapper correctement)
+    MESSAGE=$(head -500 "$NEW_FILE" | tr '\n' ' ' | sed 's/  */ /g' | sed 's/ $//')
     
-    PAYLOAD="{\"embeds\":[{\"title\":\"🎯 Nouveaux sous-domaines (${COUNT})\",\"description\":\"${MESSAGE}\",\"color\":65280,\"footer\":{\"text\":\"Gungnir CT Monitor\"},\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}]}"
+    # Construire le payload JSON proprement
+    cat > /tmp/payload.json <<EOF
+{
+  "embeds": [{
+    "title": "🎯 Nouveaux sous-domaines (${COUNT})",
+    "description": "${MESSAGE}",
+    "color": 65280,
+    "footer": {"text": "Gungnir CT Monitor"},
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  }]
+}
+EOF
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$DISCORD_WEBHOOK" \
+    HTTP_CODE=$(curl -s -o /tmp/discord_response.txt -w "%{http_code}" \
+        -X POST "$DISCORD_WEBHOOK" \
         -H "Content-Type: application/json" \
-        -d "$PAYLOAD")
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        -d @/tmp/payload.json)
     
     if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
         echo "✅ Notification Discord envoyée ($COUNT domaines)"
     else
         echo "❌ Erreur Discord (HTTP $HTTP_CODE)"
-        echo "$RESPONSE" | head -n-1
+        cat /tmp/discord_response.txt
     fi
 fi
 
-# Mise à jour seen (ajouter TOUS les domaines traités)
+# Mise à jour seen
 cat /tmp/all_domains.txt >> "$SEEN_FILE"
 sort -u -o "$SEEN_FILE" "$SEEN_FILE"
 
-# Vider les fichiers results (déjà traités)
+# Vider les fichiers results
 find "$RESULTS_DIR" -type f -exec sh -c '> "$1"' _ {} \;
 
-# Vider new_domains.txt
+# Cleanup
 > "$NEW_FILE"
+rm -f /tmp/payload.json /tmp/discord_response.txt /tmp/seen_sorted.txt /tmp/all_sorted.txt
 
 echo "Cleanup terminé"
