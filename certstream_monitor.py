@@ -116,32 +116,81 @@ def get_certificates_from_crtsh(domain):
         return []
 
 def is_subdomain_of_target(domain, target):
-    """Vérifie si domain est un sous-domaine de target"""
+    """
+    CORRIGÉ: Vérifie si domain est un VRAI sous-domaine de target
+    Rejette: wildcards, domaines racine, domaines malformés
+    """
     domain_lower = domain.lower().lstrip('*.')
-    return domain_lower.endswith(target) or domain_lower == target
+    
+    # ❌ REJETER: Domaines malformés (commencent par un point)
+    if domain_lower.startswith('.'):
+        return False
+    
+    # ❌ REJETER: Wildcard (contiennent encore des *)
+    if '*' in domain_lower:
+        return False
+    
+    # ❌ REJETER: Domaine racine exactement
+    if domain_lower == target:
+        return False
+    
+    # ✅ ACCEPTER: Vrai sous-domaine (sub.example.com avec target=example.com)
+    return domain_lower.endswith('.' + target)
+
+def is_valid_domain(domain):
+    """
+    Validation supplémentaire du domaine
+    """
+    # Rejeter si trop court (< 3 caractères)
+    if len(domain) < 3:
+        return False
+    
+    # Rejeter si commence/finit par un point ou tiret
+    if domain.startswith('.') or domain.startswith('-') or domain.endswith('.') or domain.endswith('-'):
+        return False
+    
+    # Rejeter si contient des caractères bizarres
+    if '..' in domain:  # Double point
+        return False
+    
+    return True
 
 def process_certificate(cert_data, target_domain):
-    """Traite un certificat et effectue les vérifications"""
+    """CORRIGÉ: Traite un certificat et effectue les vérifications"""
     try:
+        # Vérifier cert_id unique
         cert_id = str(cert_data.get('id', ''))
         if not cert_id or cert_id in processed_certs:
             return
         processed_certs.add(cert_id)
         
+        # Extraire et nettoyer le domaine
         domain = cert_data.get('name_value', '').strip().lower()
-        if not domain or not is_subdomain_of_target(domain, target_domain):
+        if not domain:
             return
         
+        # Retirer le wildcard (mais ne pas rejeter)
         domain_clean = domain.lstrip('*.')
         
+        # CORRIGÉ: Valider le domaine
+        if not is_valid_domain(domain_clean):
+            return
+        
+        # CORRIGÉ: Vérifier que c'est un vrai sous-domaine (pas le racine, pas wildcard)
+        if not is_subdomain_of_target(domain, target_domain):
+            return
+        
+        # Vérifier si déjà vu
         if domain_clean in seen_domains:
             return
         
+        # Enregistrer comme vu
         seen_domains.add(domain_clean)
         save_seen_domain(domain_clean)
         
         timestamp = datetime.now().isoformat()
         
+        # Premier run: juste enregistrer, pas d'alerte
         if is_first_run:
             print(".", end="", flush=True)
             return
@@ -172,7 +221,7 @@ def process_certificate(cert_data, target_domain):
         # ==================== SAVE TO FILE ====================
         output_file = os.path.join(OUTPUT_DIR, target_domain.replace('.', '_'))
         
-        # Format: domain|dns_status|http_status|dangling_flag
+        # Format: domain|dns_ip|http_status|dangling_flag
         line = f"{domain_clean}|{dns_ip if dns_ip else 'N/A'}|{http_status if http_status else http_error if http_error else 'N/A'}|{'DANGLING' if is_dangling else 'OK'}"
         
         try:
@@ -218,6 +267,7 @@ def monitor_loop():
                 print("✅ Initialization complete → alerts enabled next cycle", flush=True)
                 with open(FIRST_RUN_FILE, 'w') as f:
                     f.write(datetime.now().isoformat())
+                # Nettoyer les fichiers de résultats (premier run)
                 for target in target_domains:
                     output_file = os.path.join(OUTPUT_DIR, target.replace('.', '_'))
                     if os.path.exists(output_file):
