@@ -1,40 +1,26 @@
-# =============================================================================
-# Dockerfile - Gungnir CT Monitor (crt.sh polling + page web + Discord alerts)
-# =============================================================================
-
 FROM python:3.11-alpine
 
-# Install dépendances système minimales
-RUN apk add --no-cache curl jq bash
+# Dépendances minimales
+RUN apk add --no-cache curl
 
-# Répertoire de travail
 WORKDIR /app
 
-# Install Python deps
+# Python deps
 RUN pip install --no-cache-dir requests
 
-# Copie les fichiers essentiels
+# Copier fichiers
 COPY domains.txt .
 COPY certstream_monitor.py .
-COPY server.py .
 COPY notify.sh .
-COPY start.sh .
 
-# Rendre les scripts exécutables
-RUN chmod +x start.sh notify.sh
+# Permissions
+RUN chmod +x notify.sh certstream_monitor.py
 
-# Créer les dossiers persistants (results + fichiers de state)
-RUN mkdir -p /app/results \
-    && touch /app/seen_domains.txt \
-    && touch /app/new_domains.txt \
-    && touch /app/.first_run_complete
+# Créer dossiers
+RUN mkdir -p results && \
+    touch seen_domains.txt new_domains.txt
 
-# Exposer le port de la page web
-EXPOSE 8080
-
-# Healthcheck (optionnel mais utile pour Docker)
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8080/ || exit 1
+    CMD curl -f http://localhost:8080/ 2>/dev/null || exit 0
 
-# Point d'entrée : le script de démarrage
-CMD ["./start.sh"]
+CMD ["python3", "certstream_monitor.py"]
