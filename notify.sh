@@ -56,31 +56,30 @@ if [ "$HTTP_CODE" != "204" ] && [ "$HTTP_CODE" != "200" ]; then
     exit 1
 fi
 
-# Message 2+: Domaines par chunks (max 25 domaines par message pour éviter la limite Discord)
+# Message 2+: Domaines par chunks (max 25 domaines par message)
 CHUNK_SIZE=25
 LINE_NUM=0
 CHUNK_NUM=1
-
-cat > /tmp/chunk_$CHUNK_NUM.txt << 'CHUNK'
-CHUNK
+CHUNK_CONTENT=""
 
 while IFS= read -r domain; do
-    LINE_NUM=$((LINE_NUM + 1))
-    echo "\`$domain\`" >> /tmp/chunk_$CHUNK_NUM.txt
-    
-    if [ $((LINE_NUM % CHUNK_SIZE)) -eq 0 ]; then
-        CHUNK_NUM=$((CHUNK_NUM + 1))
-        cat > /tmp/chunk_$CHUNK_NUM.txt << 'CHUNK'
-CHUNK
+    if [ -z "$domain" ]; then
+        continue
     fi
-done < /tmp/domains_list.txt
-
-# Envoyer les chunks
-CHUNK_NUM=1
-while [ -f /tmp/chunk_$CHUNK_NUM.txt ] && [ -s /tmp/chunk_$CHUNK_NUM.txt ]; do
-    CHUNK_CONTENT=$(cat /tmp/chunk_$CHUNK_NUM.txt)
     
-    cat > /tmp/payload_chunk.json <<EOF
+    # Ajouter le domaine avec backticks et newline
+    if [ -z "$CHUNK_CONTENT" ]; then
+        CHUNK_CONTENT="\`$domain\`"
+    else
+        CHUNK_CONTENT="$CHUNK_CONTENT\n\`$domain\`"
+    fi
+    
+    LINE_NUM=$((LINE_NUM + 1))
+    
+    # Si on atteint la limite du chunk, envoyer
+    if [ $((LINE_NUM % CHUNK_SIZE)) -eq 0 ]; then
+        # Envoyer le chunk
+        cat > /tmp/payload_chunk.json <<PAYLOAD
 {
   "embeds": [{
     "description": "$CHUNK_CONTENT",
@@ -88,7 +87,37 @@ while [ -f /tmp/chunk_$CHUNK_NUM.txt ] && [ -s /tmp/chunk_$CHUNK_NUM.txt ]; do
     "footer": {"text": "Gungnir CT Monitor - Part $CHUNK_NUM"}
   }]
 }
-EOF
+PAYLOAD
+        
+        HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X POST "$DISCORD_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/payload_chunk.json 2>/dev/null || echo "0")
+        
+        if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Sent chunk $CHUNK_NUM ($LINE_NUM domains)"
+        else
+            echo "⚠️ Error chunk $CHUNK_NUM (HTTP $HTTP_CODE)"
+        fi
+        
+        # Reset pour prochain chunk
+        CHUNK_NUM=$((CHUNK_NUM + 1))
+        CHUNK_CONTENT=""
+        sleep 1  # Rate limit Discord
+    fi
+done < /tmp/domains_list.txt
+
+# Envoyer le dernier chunk s'il reste des domaines
+if [ -n "$CHUNK_CONTENT" ]; then
+    cat > /tmp/payload_chunk.json <<PAYLOAD
+{
+  "embeds": [{
+    "description": "$CHUNK_CONTENT",
+    "color": 65280,
+    "footer": {"text": "Gungnir CT Monitor - Part $CHUNK_NUM"}
+  }]
+}
+PAYLOAD
     
     HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
         -X POST "$DISCORD_WEBHOOK" \
@@ -96,14 +125,11 @@ EOF
         -d @/tmp/payload_chunk.json 2>/dev/null || echo "0")
     
     if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-        echo "✅ Sent chunk $CHUNK_NUM (domains)"
+        echo "✅ Sent chunk $CHUNK_NUM (final)"
     else
-        echo "⚠️  Error chunk $CHUNK_NUM (HTTP $HTTP_CODE)"
+        echo "⚠️ Error chunk $CHUNK_NUM (HTTP $HTTP_CODE)"
     fi
-    
-    CHUNK_NUM=$((CHUNK_NUM + 1))
-    sleep 1  # Rate limit Discord
-done
+fi
 
 echo "✅ Discord notification sent ($COUNT domains, $DANGLING dangling, $ACTIVE active)"
 
@@ -111,4 +137,4 @@ echo "✅ Discord notification sent ($COUNT domains, $DANGLING dangling, $ACTIVE
 find "$RESULTS_DIR" -type f ! -name ".gitkeep" -exec sh -c '> "$1"' _ {} \;
 
 # Cleanup temp
-rm -f /tmp/payload*.json /tmp/response.txt /tmp/domains_list.txt /tmp/chunk_*.txt
+rm -f /tmp/payload*.json /tmp/response.txt /tmp/domains_list.txt
