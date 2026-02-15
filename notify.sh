@@ -2,118 +2,71 @@
 set -e
 
 RESULTS_DIR="/app/results"
-SEEN_FILE="/app/seen_domains.txt"
-NEW_FILE="/app/new_domains.txt"
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/1472487929862684703/a4vMYqiwQO6c1VLRXNpv4w09kC2yTq-Rtdm4VkEBjsca6hfKZ6ARalPq4dvpTYoYHniu"
 
-# S'assurer que les fichiers existent
-touch "$SEEN_FILE" "$NEW_FILE"
-
-# Extraire tous les domaines des fichiers results
-find "$RESULTS_DIR" -type f -exec cat {} \; 2>/dev/null | \
-    grep -v '^$' | \
-    sort -u > /tmp/all_domains.txt
-
-# Vérifier s'il y a des domaines
-if [ ! -s /tmp/all_domains.txt ]; then
-    echo "ℹ️ Aucun domaine à traiter"
+# Vérifier s'il y a des résultats
+if [ ! -d "$RESULTS_DIR" ] || [ -z "$(find $RESULTS_DIR -type f -size +0 2>/dev/null | head -1)" ]; then
+    echo "ℹ️ No results to notify"
     exit 0
 fi
 
-# CORRECTION #1: Comparaison correcte avec comm
-sort -u "$SEEN_FILE" > /tmp/seen_sorted.txt
-comm -13 /tmp/seen_sorted.txt /tmp/all_domains.txt > "$NEW_FILE" 2>/dev/null || true
+# Extraire tous les domaines
+DOMAINS=$(find "$RESULTS_DIR" -type f -exec cat {} \; 2>/dev/null | sort -u | head -100)
 
-# Si pas de nouveaux domaines
-if [ ! -s "$NEW_FILE" ]; then
-    echo "ℹ️ Aucun nouveau domaine détecté"
-    # Mettre à jour seen avec tous les domaines actuels
-    cat "$SEEN_FILE" /tmp/all_domains.txt | sort -u > /tmp/seen_updated.txt
-    mv /tmp/seen_updated.txt "$SEEN_FILE"
+if [ -z "$DOMAINS" ]; then
+    echo "ℹ️ No domains found"
     exit 0
 fi
 
-# CORRECTION #2: Filtre anti-bruit amélioré
-grep -v -E 'api\.|media\.|analytic\.|prod-|mta-sts\.|queue\.|digireceipt\.|watsons\.|savers\.|moneyback\.|marionnaud\.|internal\.|test-|dev-|staging-' "$NEW_FILE" > "$NEW_FILE.filtered" 2>/dev/null || true
+# Compter les domaines
+COUNT=$(echo "$DOMAINS" | wc -l)
 
-if [ -s "$NEW_FILE.filtered" ]; then
-    mv "$NEW_FILE.filtered" "$NEW_FILE"
-else
-    echo "ℹ️ Tous les nouveaux domaines filtrés (bruit détecté)"
-    cat "$SEEN_FILE" /tmp/all_domains.txt | sort -u > /tmp/seen_updated.txt
-    mv /tmp/seen_updated.txt "$SEEN_FILE"
-    exit 0
-fi
+# Compter les dangling
+DANGLING=$(echo "$DOMAINS" | grep -c "DANGLING" || echo "0")
 
-# CORRECTION #3: Vérifier après filtrage
-if [ ! -s "$NEW_FILE" ]; then
-    echo "ℹ️ Aucun domaine après filtrage"
-    cat "$SEEN_FILE" /tmp/all_domains.txt | sort -u > /tmp/seen_updated.txt
-    mv /tmp/seen_updated.txt "$SEEN_FILE"
-    exit 0
-fi
+# Compter les actifs (HTTP 200)
+ACTIVE=$(echo "$DOMAINS" | grep -E "\|20[0-9]\|" | wc -l || echo "0")
 
-# Compter les nouveaux domaines
-COUNT=$(wc -l < "$NEW_FILE")
+# Formater la liste
+DOMAIN_LIST=$(echo "$DOMAINS" | cut -d'|' -f1 | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')
 
-# CORRECTION #4: Seuil élevé pour éviter les faux positifs
-if [ "$COUNT" -gt 100 ]; then
-    echo "⚠️ Trop de nouveaux domaines ($COUNT) → probablement bruit, skip notification"
-    echo "Premiers domaines détectés :"
-    head -20 "$NEW_FILE"
-    # Mettre à jour seen quand même
-    cat "$SEEN_FILE" /tmp/all_domains.txt | sort -u > /tmp/seen_updated.txt
-    mv /tmp/seen_updated.txt "$SEEN_FILE"
-    exit 0
-fi
+# Limiter à 2000 chars pour Discord
+DOMAIN_LIST=$(echo "$DOMAIN_LIST" | cut -c1-2000)
 
-# CORRECTION #5: Construire le message de façon sûre (éviter les injections)
-MESSAGE=$(head -500 "$NEW_FILE" | sed 's/"/\\"/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ //;s/ $//')
-
-# Construire le payload JSON proprement (avec jq serait mieux mais pas dispo en sh)
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-cat > /tmp/payload.json <<PAYLOAD
+# Créer le payload JSON
+cat > /tmp/payload.json <<EOF
 {
   "embeds": [{
-    "title": "🎯 Nouveaux sous-domaines (${COUNT})",
-    "description": "${MESSAGE}",
+    "title": "🎯 New Subdomains Found ($COUNT)",
+    "description": "$DOMAIN_LIST",
+    "fields": [
+      {"name": "💾 Total", "value": "$COUNT", "inline": true},
+      {"name": "⚠️ Dangling DNS", "value": "$DANGLING", "inline": true},
+      {"name": "✅ Active (HTTP 200)", "value": "$ACTIVE", "inline": true}
+    ],
     "color": 65280,
     "footer": {"text": "Gungnir CT Monitor"},
-    "timestamp": "${TIMESTAMP}"
+    "timestamp": "$TIMESTAMP"
   }]
 }
-PAYLOAD
-
-# CORRECTION #6: Vérifier la syntaxe JSON avant d'envoyer
-if ! grep -q '{' /tmp/payload.json 2>/dev/null; then
-    echo "❌ Erreur construction JSON"
-    exit 1
-fi
+EOF
 
 # Envoyer à Discord
-HTTP_CODE=$(curl -s -o /tmp/discord_response.txt -w "%{http_code}" \
+HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
     -X POST "$DISCORD_WEBHOOK" \
     -H "Content-Type: application/json" \
-    -d @/tmp/payload.json 2>/dev/null)
+    -d @/tmp/payload.json 2>/dev/null || echo "0")
 
 if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-    echo "✅ Notification Discord envoyée ($COUNT domaines)"
+    echo "✅ Discord notification sent ($COUNT domains, $DANGLING dangling)"
 else
-    echo "❌ Erreur Discord (HTTP $HTTP_CODE)"
-    if [ -s /tmp/discord_response.txt ]; then
-        head -5 /tmp/discord_response.txt
-    fi
+    echo "❌ Discord error (HTTP $HTTP_CODE)"
 fi
 
-# Mise à jour seen_domains avec tous les domaines actuels
-cat "$SEEN_FILE" /tmp/all_domains.txt | sort -u > /tmp/seen_updated.txt
-mv /tmp/seen_updated.txt "$SEEN_FILE"
-
-# Vider les fichiers results (éviter de retraiter les mêmes)
+# Cleanup results
 find "$RESULTS_DIR" -type f ! -name ".gitkeep" -exec sh -c '> "$1"' _ {} \;
 
-# Cleanup
-rm -f "$NEW_FILE" /tmp/payload.json /tmp/discord_response.txt /tmp/seen_sorted.txt /tmp/all_sorted.txt /tmp/all_domains.txt /tmp/seen_updated.txt
-
-echo "✅ Cleanup terminé"
+# Cleanup temp
+rm -f /tmp/payload.json /tmp/response.txt
