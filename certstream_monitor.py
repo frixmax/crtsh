@@ -98,6 +98,23 @@ def save_seen_domain(domain):
     except:
         pass
 
+def load_domains_in_results(target_domain):
+    """Charger les domaines déjà en results/ pour ce target"""
+    output_file = os.path.join(OUTPUT_DIR, target_domain.replace('.', '_'))
+    domains = set()
+    
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, 'r') as f:
+                for line in f:
+                    domain = line.split('|')[0].strip()
+                    if domain:
+                        domains.add(domain)
+        except:
+            pass
+    
+    return domains
+
 seen_domains = load_seen_domains()
 print(f"📊 {len(seen_domains)} domaines déjà vus\n", flush=True)
 
@@ -118,7 +135,7 @@ def get_certificates_from_crtsh(domain):
 def is_subdomain_of_target(domain, target):
     """
     CORRIGÉ: Vérifie si domain est un VRAI sous-domaine de target
-    Rejette: wildcards, domaines racine, domaines malformés
+    Rejette: wildcards, domaines racine, www, domaines malformés
     """
     domain_lower = domain.lower().lstrip('*.')
     
@@ -132,6 +149,10 @@ def is_subdomain_of_target(domain, target):
     
     # ❌ REJETER: Domaine racine exactement
     if domain_lower == target:
+        return False
+    
+    # ❌ REJETER: www.example.com si target=example.com
+    if domain_lower == f"www.{target}":
         return False
     
     # ✅ ACCEPTER: Vrai sous-domaine (sub.example.com avec target=example.com)
@@ -155,7 +176,7 @@ def is_valid_domain(domain):
     
     return True
 
-def process_certificate(cert_data, target_domain):
+def process_certificate(cert_data, target_domain, domains_in_results):
     """CORRIGÉ: Traite un certificat et effectue les vérifications"""
     try:
         # Vérifier cert_id unique
@@ -180,8 +201,12 @@ def process_certificate(cert_data, target_domain):
         if not is_subdomain_of_target(domain, target_domain):
             return
         
-        # Vérifier si déjà vu
+        # Vérifier si déjà vu (seen_domains.txt)
         if domain_clean in seen_domains:
+            return
+        
+        # CORRIGÉ: Vérifier si déjà en results/ ce cycle
+        if domain_clean in domains_in_results:
             return
         
         # Enregistrer comme vu
@@ -212,6 +237,11 @@ def process_certificate(cert_data, target_domain):
                 print(f"  HTTP ✅: {http_status}", flush=True)
             else:
                 print(f"  HTTP ❌: {http_error if http_error else 'no response'}", flush=True)
+        
+        # CORRIGÉ: Rejeter si DNS et HTTP tous les deux vides
+        if dns_ip is None and http_status is None and http_error is None:
+            print(f"  ⚠️ No DNS + No HTTP = SKIP", flush=True)
+            return
         
         # Dangling DNS detection
         is_dangling = detect_dangling(domain_clean, dns_ip, http_status, http_error)
@@ -250,12 +280,16 @@ def monitor_loop():
             
             for idx, target in enumerate(target_domains, 1):
                 print(f"[{idx}/{len(target_domains)}] {target}...", end=" ", flush=True)
+                
+                # CORRIGÉ: Charger les domaines déjà en results/
+                domains_in_results = load_domains_in_results(target)
+                
                 certificates = get_certificates_from_crtsh(target)
                 
                 if certificates:
                     certificates.sort(key=lambda x: x.get('entry_timestamp', ''), reverse=True)
                     for cert in certificates[:15]:
-                        process_certificate(cert, target)
+                        process_certificate(cert, target, domains_in_results)
                 
                 print("OK", flush=True)
                 time.sleep(2)
