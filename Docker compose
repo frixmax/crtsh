@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  gungnir-monitor:
+    build: .
+    container_name: gungnir-ct-monitor
+    restart: unless-stopped
+    
+    volumes:
+      - ./domains.txt:/app/domains.txt:ro
+      - ./results:/app/results
+      - ./seen_domains.txt:/app/seen_domains.txt
+    
+    environment:
+      - TZ=UTC
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    networks:
+      - gungnir-net
+
+networks:
+  gungnir-net:
+    driver: bridge
