@@ -11,7 +11,7 @@ if [ ! -d "$RESULTS_DIR" ] || [ -z "$(find $RESULTS_DIR -type f -size +0 2>/dev/
 fi
 
 # Extraire tous les domaines
-DOMAINS=$(find "$RESULTS_DIR" -type f -exec cat {} \; 2>/dev/null | sort -u | head -100)
+DOMAINS=$(find "$RESULTS_DIR" -type f -exec cat {} \; 2>/dev/null | cut -d'|' -f1 | sort -u)
 
 if [ -z "$DOMAINS" ]; then
     echo "ℹ️ No domains found"
@@ -22,30 +22,22 @@ fi
 COUNT=$(echo "$DOMAINS" | wc -l)
 
 # Compter les dangling
-DANGLING=$(echo "$DOMAINS" | grep -c "DANGLING" || echo "0")
+DANGLING=$(find "$RESULTS_DIR" -type f -exec cat {} \; 2>/dev/null | grep -c "DANGLING" || echo "0")
 
 # Compter les actifs (HTTP 200)
-ACTIVE=$(echo "$DOMAINS" | grep -E "\|20[0-9]\|" | wc -l || echo "0")
-
-# Formater la liste
-DOMAIN_LIST=$(echo "$DOMAINS" | cut -d'|' -f1 | tr '\n' ',' | sed 's/,/, /g' | sed 's/, $//')
-
-# Limiter à 2000 chars pour Discord
-DOMAIN_LIST=$(echo "$DOMAIN_LIST" | cut -c1-2000)
+ACTIVE=$(find "$RESULTS_DIR" -type f -exec cat {} \; 2>/dev/null | grep -E "\|20[0-9]\|" | wc -l || echo "0")
 
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Créer le payload JSON
-cat > /tmp/payload.json <<EOF
+# Sauvegarder les domaines dans un fichier temporaire
+echo "$DOMAINS" > /tmp/domains_list.txt
+
+# Message 1: Header avec stats
+cat > /tmp/payload1.json <<EOF
 {
   "embeds": [{
-    "title": "🎯 New Subdomains Found ($COUNT)",
-    "description": "$DOMAIN_LIST",
-    "fields": [
-      {"name": "💾 Total", "value": "$COUNT", "inline": true},
-      {"name": "⚠️ Dangling DNS", "value": "$DANGLING", "inline": true},
-      {"name": "✅ Active (HTTP 200)", "value": "$ACTIVE", "inline": true}
-    ],
+    "title": "🎯 New Subdomains Found",
+    "description": "**Total:** $COUNT\n**Dangling DNS:** $DANGLING\n**Active (HTTP 200):** $ACTIVE",
     "color": 65280,
     "footer": {"text": "Gungnir CT Monitor"},
     "timestamp": "$TIMESTAMP"
@@ -53,20 +45,70 @@ cat > /tmp/payload.json <<EOF
 }
 EOF
 
-# Envoyer à Discord
+# Envoyer message 1
 HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
     -X POST "$DISCORD_WEBHOOK" \
     -H "Content-Type: application/json" \
-    -d @/tmp/payload.json 2>/dev/null || echo "0")
+    -d @/tmp/payload1.json 2>/dev/null || echo "0")
 
-if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-    echo "✅ Discord notification sent ($COUNT domains, $DANGLING dangling)"
-else
-    echo "❌ Discord error (HTTP $HTTP_CODE)"
+if [ "$HTTP_CODE" != "204" ] && [ "$HTTP_CODE" != "200" ]; then
+    echo "❌ Discord error on header (HTTP $HTTP_CODE)"
+    exit 1
 fi
+
+# Message 2+: Domaines par chunks (max 25 domaines par message pour éviter la limite Discord)
+CHUNK_SIZE=25
+LINE_NUM=0
+CHUNK_NUM=1
+
+cat > /tmp/chunk_$CHUNK_NUM.txt << 'CHUNK'
+CHUNK
+
+while IFS= read -r domain; do
+    LINE_NUM=$((LINE_NUM + 1))
+    echo "\`$domain\`" >> /tmp/chunk_$CHUNK_NUM.txt
+    
+    if [ $((LINE_NUM % CHUNK_SIZE)) -eq 0 ]; then
+        CHUNK_NUM=$((CHUNK_NUM + 1))
+        cat > /tmp/chunk_$CHUNK_NUM.txt << 'CHUNK'
+CHUNK
+    fi
+done < /tmp/domains_list.txt
+
+# Envoyer les chunks
+CHUNK_NUM=1
+while [ -f /tmp/chunk_$CHUNK_NUM.txt ] && [ -s /tmp/chunk_$CHUNK_NUM.txt ]; do
+    CHUNK_CONTENT=$(cat /tmp/chunk_$CHUNK_NUM.txt)
+    
+    cat > /tmp/payload_chunk.json <<EOF
+{
+  "embeds": [{
+    "description": "$CHUNK_CONTENT",
+    "color": 65280,
+    "footer": {"text": "Gungnir CT Monitor - Part $CHUNK_NUM"}
+  }]
+}
+EOF
+    
+    HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+        -X POST "$DISCORD_WEBHOOK" \
+        -H "Content-Type: application/json" \
+        -d @/tmp/payload_chunk.json 2>/dev/null || echo "0")
+    
+    if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+        echo "✅ Sent chunk $CHUNK_NUM (domains)"
+    else
+        echo "⚠️  Error chunk $CHUNK_NUM (HTTP $HTTP_CODE)"
+    fi
+    
+    CHUNK_NUM=$((CHUNK_NUM + 1))
+    sleep 1  # Rate limit Discord
+done
+
+echo "✅ Discord notification sent ($COUNT domains, $DANGLING dangling, $ACTIVE active)"
 
 # Cleanup results
 find "$RESULTS_DIR" -type f ! -name ".gitkeep" -exec sh -c '> "$1"' _ {} \;
 
 # Cleanup temp
-rm -f /tmp/payload.json /tmp/response.txt
+rm -f /tmp/payload*.json /tmp/response.txt /tmp/domains_list.txt /tmp/chunk_*.txt
